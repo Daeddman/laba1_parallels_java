@@ -3,7 +3,7 @@ out/
 !**/src/main/**/out/
 !**/src/test/**/out/
 .kotlin
-.md
+\*.md
 
 ### Eclipse ###
 .apt_generated
