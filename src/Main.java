@@ -1,144 +1,173 @@
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Клас потоку для обчислення суми числової послідовності
- */
-class SumThread extends Thread {
-    private final int threadNumber;
-    final int step;
-    final int workTimeMs;  // Зроблено package-private для доступу в Main
-    private long sum = 0;
-    private int count = 0;
+class SumWorker extends Thread {
+    private final int id;
+    private final int step;
+    private final int workTimeMs;
+    private final AtomicBoolean stopRequested = new AtomicBoolean(false);
+    private BigInteger sum = BigInteger.ZERO;
+    private long count = 0;
 
-    public SumThread(int threadNumber, int step, int workTimeMs) {
-        this.threadNumber = threadNumber;
+    public SumWorker(int id, int step, int workTimeMs) {
+        if (step <= 0) {
+            throw new IllegalArgumentException("step must be > 0");
+        }
+        if (workTimeMs <= 0) {
+            throw new IllegalArgumentException("workTimeMs must be > 0");
+        }
+        this.id = id;
         this.step = step;
         this.workTimeMs = workTimeMs;
+        setName("SumWorker-" + id);
+    }
+
+    public int getWorkTimeMs() {
+        return workTimeMs;
+    }
+
+    public void requestStop() {
+        stopRequested.set(true);
     }
 
     @Override
     public void run() {
-        long startTime = System.currentTimeMillis();
-        int currentValue = 0;
+        BigInteger currentValue = BigInteger.ZERO;
+        BigInteger bigStep = BigInteger.valueOf(step);
 
-        // Працюємо поки не минув заданий час
-        while (System.currentTimeMillis() - startTime < workTimeMs) {
-            sum += currentValue;
+        while (!stopRequested.get()) {
+            sum = sum.add(currentValue);
+            currentValue = currentValue.add(bigStep);
             count++;
-            currentValue += step;
-
-            // Невелика затримка для демонстрації роботи
-            try {
-                Thread.sleep(1);
-            } catch (InterruptedException e) {
-                break;
-            }
         }
 
-        // Виведення результатів роботи потоку
-        System.out.printf("Потік №%d завершено: Сума = %d, Кількість елементів = %d%n",
-                         threadNumber, sum, count);
+        System.out.printf(
+                "[Потік %d] завершив роботу. Крок: %d | Доданків: %d | Сума: %s%n",
+                id, step, count, sum.toString()
+        );
+    }
+}
+
+class ControllerThread extends Thread {
+    private final List<SumWorker> workers;
+
+    public ControllerThread(List<SumWorker> workers) {
+        this.workers = workers;
+        setName("ControllerThread");
+    }
+
+    @Override
+    public void run() {
+        long start = System.nanoTime();
+        boolean[] stopSent = new boolean[workers.size()];
+        int active = workers.size();
+
+        while (active > 0) {
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+            for (int i = 0; i < workers.size(); i++) {
+                if (stopSent[i]) {
+                    continue;
+                }
+
+                SumWorker worker = workers.get(i);
+                if (elapsedMs >= worker.getWorkTimeMs()) {
+                    worker.requestStop();
+                    stopSent[i] = true;
+                    active--;
+                }
+            }
+
+            try {
+                Thread.sleep(1);
+            } catch (InterruptedException ignored) {
+                interrupt();
+                return;
+            }
+        }
     }
 }
 
 public class Main {
+    private static final int MIN_THREADS = 1;
     private static final int MAX_THREADS = 32;
+    private static final int MAX_STEP = 1_000_000;
+    private static final int MAX_WORK_TIME = 60_000;
 
-    public static void main(String[] args) {
+    private static int readInt(Scanner scanner, String prompt, int min, int max) {
+        while (true) {
+            System.out.print(prompt);
+            if (!scanner.hasNextInt()) {
+                System.out.println("Помилка. Введіть ціле число.");
+                scanner.next();
+                continue;
+            }
+            int value = scanner.nextInt();
+            if (value >= min && value <= max) {
+                return value;
+            }
+            System.out.printf("Помилка. Введіть число в межах від %d до %d.%n", min, max);
+        }
+    }
+
+static void main() {
         Scanner scanner = new Scanner(System.in);
 
-        System.out.println("=== Багатопоточна програма обчислення сум послідовностей ===");
-
-        // Введення кількості потоків з валідацією
-        int threadCount;
-        while (true) {
-            System.out.print("Введіть кількість потоків (1-" + MAX_THREADS + "): ");
-            try {
-                threadCount = scanner.nextInt();
-                if (threadCount > 0 && threadCount <= MAX_THREADS) {
-                    break;
-                } else {
-                    System.out.println("❌ Помилка: кількість потоків має бути від 1 до " + MAX_THREADS + "!");
-                }
-            } catch (Exception e) {
-                System.out.println("❌ Помилка: введіть ціле число!");
-                scanner.nextLine(); // Очистити буфер
-            }
-        }
-
-        System.out.println("\n--- Параметри для кожного потоку ---");
-
-        // Створення робочих потоків
-        List<SumThread> threads = new ArrayList<>();
-
-        for (int i = 0; i < threadCount; i++) {
-            System.out.println("\nПотік №" + (i + 1) + ":");
-
-            // Введення кроку з валідацією
-            int step;
-            while (true) {
-                System.out.print("  Введіть крок послідовності (>0): ");
-                try {
-                    step = scanner.nextInt();
-                    if (step > 0) {
-                        break;
-                    } else {
-                        System.out.println("  ❌ Помилка: крок має бути більше 0!");
-                    }
-                } catch (Exception e) {
-                    System.out.println("  ❌ Помилка: введіть ціле число!");
-                    scanner.nextLine(); // Очистити буфер
-                }
-            }
-
-            // Введення часу з валідацією
-            int workTime;
-            while (true) {
-                System.out.print("  Введіть час роботи в мс (>0): ");
-                try {
-                    workTime = scanner.nextInt();
-                    if (workTime > 0) {
-                        break;
-                    } else {
-                        System.out.println("  ❌ Помилка: час роботи має бути більше 0!");
-                    }
-                } catch (Exception e) {
-                    System.out.println("  ❌ Помилка: введіть ціле число!");
-                    scanner.nextLine(); // Очистити буфер
-                }
-            }
-
-            SumThread thread = new SumThread(i + 1, step, workTime);
-            threads.add(thread);
-        }
-
-        System.out.println("\n--- Запуск програми ---");
-
-        // Виведення конфігурації
-        for (int i = 0; i < threadCount; i++) {
-            System.out.println("Потік №" + (i + 1) + ": крок=" + threads.get(i).step +
-                             ", час=" + threads.get(i).workTimeMs + " мс");
-        }
+        System.out.println("Лабораторна робота №1");
+        System.out.println("Тема: Засоби створення багатопоточних програм");
         System.out.println();
 
-        // Одночасний запуск всіх потоків
-        System.out.println("Запуск всіх потоків одночасно...\n");
-        for (SumThread thread : threads) {
-            thread.start();
+        int threadCount = readInt(scanner,
+                "Кількість потоків (1-32): ",
+                MIN_THREADS,
+                MAX_THREADS);
+        System.out.println();
+
+        List<SumWorker> workers = new ArrayList<>();
+
+        for (int i = 0; i < threadCount; i++) {
+            System.out.println("Налаштування потоку " + (i + 1) + ":");
+            int step = readInt(scanner,
+                    "  Крок (1-1000000): ",
+                    1,
+                    MAX_STEP);
+            int workTime = readInt(scanner,
+                    "  Час роботи в мс (1-60000): ",
+                    1,
+                    MAX_WORK_TIME);
+            workers.add(new SumWorker(i + 1, step, workTime));
+            System.out.println();
         }
 
-        // Очікування завершення всіх потоків
-        try {
-            for (SumThread thread : threads) {
-                thread.join();
+        for (SumWorker worker : workers) {
+            worker.start();
+        }
+
+        ControllerThread controller = new ControllerThread(workers);
+        controller.start();
+
+        for (SumWorker worker : workers) {
+            try {
+                worker.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.err.println("Перервано під час очікування робочого потоку.");
+                return;
             }
-        } catch (InterruptedException e) {
-            System.err.println("Помилка при очікуванні завершення потоків");
         }
 
-        System.out.println("\n--- Програма завершена ---");
-        scanner.close();
+        try {
+            controller.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("Перервано під час очікування керуючого потоку.");
+            return;
+        }
+
+        System.out.println();
+        System.out.println("Усі потоки завершили роботу.");
     }
 }
